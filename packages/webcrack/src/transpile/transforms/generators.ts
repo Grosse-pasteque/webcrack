@@ -150,16 +150,87 @@ export default {
         cases[label] = body;
       }
     }
-    /*
-when encounter a breakable statement (for, while, switch)
--> isBreakable makes the whole branch breakable
-*/
+    // too messy to be able to figure out any issues
+    function resolveSwitchs(cases: any[][]) {
+      for (let label = cases.length - 1; label >= 0; label--) {
+        const body = [];
+        const lines = cases[label];
+        while (lines.length) {
+          const line = lines.shift();
+          let nextLabel;
+          if (t.isSwitchStatement(line)) {
+            console.log(line.discriminant);
+            // can also chose a pattern since it's consistent
+            let isDefault = { value: false };
+            const supposedDefault = lines.shift();
+            if (!generatorNext.match(supposedDefault))
+              throw new Error('Invalid switch statement');
+            const [{ value: mode }, { value: nextLabel = null } = {}] =
+              generatorNextReturn.current!.elements;
+            if (mode !== 3 || nextLabel < label)
+              throw new Error('Invalid switch statement');
+            const casesLabels: number[] = [];
+            for (const c of line.cases) {
+              if (
+                c.consequent.length == 1 &&
+                generatorNext.match(c.consequent[0])
+              ) {
+                const [{ value: mode }, { value: nextLabel = null } = {}] =
+                  generatorNextReturn.current!.elements;
+                if (mode !== 3 || nextLabel < label)
+                  throw new Error('Invalid switch statement');
+                casesLabels.push(nextLabel);
+              }
+            }
+            if (casesLabels.length == line.cases.length) {
+              casesLabels.forEach((label, i) => {
+                line.cases[i].consequent = build(
+                  label,
+                  cases[label],
+                  cases,
+                  nextLabel,
+                  false,
+                  casesLabels, // need callback to know if jumped to default
+                  isDefault,
+                );
+              });
+              if (isDefault.value) {
+                line.cases.push(
+                  t.switchCase(
+                    null,
+                    build(nextLabel, cases[nextLabel], cases, isDefault.label),
+                  ),
+                );
+              }
+              body.push(line);
+              console.log(isDefault);
+              isDefault.label &&
+                body.push(
+                  t.returnStatement(
+                    t.arrayExpression([
+                      // resolved by build
+                      t.numericLiteral(3),
+                      t.numericLiteral(isDefault.label),
+                    ]),
+                  ),
+                );
+            }
+          } else {
+            body.push(line);
+          }
+        }
+        cases[label] = body;
+      }
+    }
+    // TODO: use a Context(label, lines, ..., type: LOOP | SWITCH | ..., parent: Context) ...
     function build(
       label: number,
       lines: any[],
       cases: any[][],
       breakOnLabel: number | null = null,
       isBreakable: boolean = false,
+      casesLabels: number[] | null = null, // breaks on JUMP >= breakOnLabel && ignores
+      isDefault = null,
     ): any[] {
       if (!lines || !Array.isArray(lines)) throw new Error('Invalid input');
       let body = [];
@@ -179,7 +250,28 @@ when encounter a breakable statement (for, while, switch)
               `Invalid CONTINUE jump: found ${lines.length} remaining lines after jump`,
             );
           label++;
-          if (label === breakOnLabel) {
+          if (casesLabels) {
+            console.log(label, breakOnLabel, isDefault);
+            if (casesLabels?.includes(label)) {
+              /*
+              case 0:
+                a.label = X  <--- we are HERE
+              case 1:
+                return [3, X];
+              */
+              continue; // ignored
+            } else if (label >= breakOnLabel) {
+              if (label > breakOnLabel) {
+                isDefault.value = true;
+              }
+              isDefault.label = isDefault.label
+                ? Math.max(label, isDefault.label)
+                : label;
+              console.log(label);
+              body.push(t.breakStatement());
+              continue;
+            }
+          } else if (label === breakOnLabel) {
             if (isBreakable)
               // Loop breaks
               body.push(t.breakStatement());
@@ -204,7 +296,17 @@ when encounter a breakable statement (for, while, switch)
             case 3: // BREAK
               const nextLabel = value.value;
               const nextLines = cases[nextLabel];
-              if (nextLabel === breakOnLabel) {
+              if (casesLabels && nextLabel >= breakOnLabel) {
+                if (nextLabel > breakOnLabel) {
+                  isDefault.value = true;
+                }
+                isDefault.label = isDefault.label
+                  ? Math.max(nextLabel, isDefault.label)
+                  : nextLabel;
+                // else if (nextLabel === breakOnLabel) isDefault.value = false;
+                body.push(t.breakStatement());
+                continue;
+              } else if (nextLabel === breakOnLabel) {
                 // basically kills the loop
                 if (isBreakable)
                   // Loop breaks
@@ -212,9 +314,7 @@ when encounter a breakable statement (for, while, switch)
               } else if (t.isNumericLiteral(value) && nextLines) {
                 // TODO: if known nextLabel & nextLabel < label -> loop
                 if (nextLabel < label && !nextLines.length) {
-                  body.push(
-                    t.expressionStatement(t.stringLiteral('GOTO ' + nextLabel)),
-                  );
+                  throw new Error('Unreasolved loop detected');
                 } else {
                   body.push(
                     ...build(
@@ -223,11 +323,15 @@ when encounter a breakable statement (for, while, switch)
                       cases,
                       breakOnLabel,
                       isBreakable,
+                      casesLabels,
+                      isDefault,
                     ),
                   );
                 }
               } else {
-                throw new Error('Unknown BREAK location');
+                throw new Error(
+                  `Unknown BREAK location: ${nextLabel} ${nextLines}`,
+                );
               }
               break;
             case 4: // YIELD
@@ -239,6 +343,8 @@ when encounter a breakable statement (for, while, switch)
                   cases,
                   breakOnLabel,
                   isBreakable,
+                  casesLabels,
+                  isDefault,
                 ),
               );
               break;
@@ -258,6 +364,8 @@ when encounter a breakable statement (for, while, switch)
                     cases,
                     breakOnLabel,
                     isBreakable,
+                    casesLabels,
+                    isDefault,
                   ),
                 );
               } else {
@@ -298,7 +406,15 @@ when encounter a breakable statement (for, while, switch)
             t.ifStatement(
               t.cloneNode(test),
               t.blockStatement(
-                build(label, inner, cases, nextBreakOnLabel, isBreakable),
+                build(
+                  label,
+                  inner,
+                  cases,
+                  nextBreakOnLabel,
+                  isBreakable,
+                  casesLabels,
+                  isDefault,
+                ),
               ),
             ),
           );
@@ -314,7 +430,15 @@ when encounter a breakable statement (for, while, switch)
           body.push(
             t.tryStatement(
               t.blockStatement(
-                build(label, lines, cases, nextLabel, isBreakable),
+                build(
+                  label,
+                  lines,
+                  cases,
+                  nextLabel,
+                  isBreakable,
+                  casesLabels,
+                  isDefault,
+                ),
               ),
               handlerLabel
                 ? t.catchClause(
@@ -326,6 +450,8 @@ when encounter a breakable statement (for, while, switch)
                         cases,
                         nextLabel,
                         isBreakable,
+                        casesLabels,
+                        isDefault,
                       ),
                     ),
                   )
@@ -338,6 +464,8 @@ when encounter a breakable statement (for, while, switch)
                       cases,
                       nextLabel,
                       isBreakable,
+                      casesLabels,
+                      isDefault,
                     ),
                   )
                 : null,
@@ -421,6 +549,14 @@ when encounter a breakable statement (for, while, switch)
         ReturnStatement({ node }) {
           node.argument = node.argument.elements[1] || null;
         },
+        SwitchStatement({ node: { cases } }) {
+          const caseBody = cases[cases.length - 1].consequent;
+          if (
+            caseBody.length &&
+            t.isBreakStatement(caseBody[caseBody.length - 1], { label: null })
+          )
+            caseBody.splice(-1, 1);
+        },
       });
       yieldsPaths.forEach((yieldPath) =>
         getNextPathSibling(yieldPath).traverse({
@@ -457,6 +593,7 @@ when encounter a breakable statement (for, while, switch)
 
           const cases = generatorCases.current!.map((c) => c.consequent);
           resolveLoops(cases);
+          resolveSwitchs(cases);
           path.replaceWithMultiple(build(0, cases[0], cases));
           cleanup(path.parentPath);
           this.changes++;

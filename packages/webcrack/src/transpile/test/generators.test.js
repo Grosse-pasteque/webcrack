@@ -500,8 +500,10 @@ describe('TS', () => {
       }
     `).toMatchInlineSnapshot(`
       function* test(i) {
+        var _a;
         yield "start";
-        switch (i) {
+        _a = i;
+        switch (_a) {
           case 0:
             return 0;
           case 1:
@@ -515,6 +517,123 @@ describe('TS', () => {
             break;
           default:
             yield -1;
+        }
+        yield "end";
+      }
+    `));
+  test('nested switch statement', () =>
+    expectJS(`
+      function test(i) {
+        var _a;
+        var _b;
+        return __generator(this, function (_c) {
+          switch (_c.label) {
+            case 0:
+              return [4 /*yield*/, "start"];
+            case 1:
+              _c.sent();
+              _a = i;
+              switch (_a) {
+                case 0:
+                  return [3 /*break*/, 2];
+                case 1:
+                  return [3 /*break*/, 3];
+                case 2:
+                  return [3 /*break*/, 5];
+                case 3:
+                  return [3 /*break*/, 7];
+              }
+              return [3 /*break*/, 17];
+            case 2:
+              return [2 /*return*/, 0];
+            case 3:
+              return [4 /*yield*/, 1];
+            case 4:
+              _c.sent();
+              i = 3;
+              _c.label = 5;
+            case 5:
+              return [4 /*yield*/, 2];
+            case 6:
+              _c.sent();
+              return [3 /*break*/, 19];
+            case 7:
+              return [4 /*yield*/, 3];
+            case 8:
+              _c.sent();
+              _b = i;
+              switch (_b) {
+                case "a":
+                  return [3 /*break*/, 9];
+                case "b":
+                  return [3 /*break*/, 11];
+                case "c":
+                  return [3 /*break*/, 13];
+              }
+              return [3 /*break*/, 15];
+            case 9:
+              return [4 /*yield*/, 4];
+            case 10:
+              _c.sent();
+              _c.label = 11;
+            case 11:
+              return [4 /*yield*/, 5];
+            case 12:
+              _c.sent();
+              _c.label = 13;
+            case 13:
+              return [4 /*yield*/, 6];
+            case 14:
+              _c.sent();
+              _c.label = 15;
+            case 15:
+              return [4 /*yield*/, 7];
+            case 16:
+              _c.sent();
+              return [3 /*break*/, 19];
+            case 17:
+              return [4 /*yield*/, 8];
+            case 18:
+              _c.sent();
+              _c.label = 19;
+            case 19:
+              return [4 /*yield*/, "end"];
+            case 20:
+              _c.sent();
+              return [2 /*return*/];
+          }
+        });
+      }
+    `).toMatchInlineSnapshot(`
+      function* test(i) {
+        var _a;
+        var _b;
+        yield "start";
+        _a = i;
+        switch (_a) {
+          case 0:
+            return 0;
+          case 1:
+            yield 1;
+            i = 3;
+          case 2:
+            yield 2;
+            break;
+          case 3:
+            yield 3;
+            _b = i;
+            switch (_b) {
+              case "a":
+                yield 4;
+              case "b":
+                yield 5;
+              case "c":
+                yield 6;
+            }
+            yield 7;
+            break;
+          default:
+            yield 8;
         }
         yield "end";
       }
