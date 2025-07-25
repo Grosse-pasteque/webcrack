@@ -60,7 +60,7 @@ export default {
     const generatorBranchTest = m.capture();
     const generatorBranch = m.ifStatement(
       generatorBranchTest,
-      generatorNext,
+      m.or(generatorNext, m.blockStatement([generatorNext])),
       null,
     );
 
@@ -103,7 +103,7 @@ export default {
       m.blockStatement([m.breakStatement()]),
     );
 
-    function resolveLoops(cases: any[][]) {
+    function resolveLoops(cases: any[][], breakableLocations: obejct) {
       for (let label = 0; label < cases.length; label++) {
         const body = [];
         const lines = cases[label];
@@ -114,26 +114,29 @@ export default {
             const [{ value: mode }, { value: nextLabel = null } = {}] =
               generatorNextReturn.current!.elements;
             if (mode === 3 && nextLabel < label) {
+              const loop = (breakableLocations[label] = t.whileStatement(
+                t.booleanLiteral(true),
+                t.blockStatement([
+                  ...build(
+                    nextLabel,
+                    cases[nextLabel],
+                    cases,
+                    breakableLocations,
+                    label + 1, // breakOnLabel
+                    true, // isBreakable
+                  ),
+                  ...build(
+                    label,
+                    body,
+                    cases,
+                    breakableLocations,
+                    label + 1, // NOTE: doesnt really matter: breakOnLabel
+                    true, // isBreakable
+                  ),
+                ]),
+              ));
               cases[nextLabel] = [
-                t.whileStatement(
-                  t.booleanLiteral(true),
-                  t.blockStatement([
-                    ...build(
-                      nextLabel,
-                      cases[nextLabel],
-                      cases,
-                      label + 1, // breakOnLabel
-                      true, // isBreakable
-                    ),
-                    ...build(
-                      label,
-                      body,
-                      cases,
-                      label + 1, // NOTE: doesnt really matter: breakOnLabel
-                      true, // isBreakable
-                    ),
-                  ]),
-                ),
+                loop,
                 t.returnStatement(
                   t.arrayExpression([
                     // resolved by build
@@ -151,15 +154,16 @@ export default {
       }
     }
     // too messy to be able to figure out any issues
-    function resolveSwitchs(cases: any[][]) {
+    function resolveSwitchs(cases: any[][], breakableLocations: object) {
       for (let label = cases.length - 1; label >= 0; label--) {
+        // for (let label = 0; label < cases.length; label++) {
         const body = [];
         const lines = cases[label];
         while (lines.length) {
           const line = lines.shift();
           let nextLabel;
           if (t.isSwitchStatement(line)) {
-            console.log(line.discriminant);
+            // NOTE: may cause issues cuz can't be sure that it's a switch statement with yields
             // can also chose a pattern since it's consistent
             let isDefault = { value: false };
             const supposedDefault = lines.shift();
@@ -188,6 +192,7 @@ export default {
                   label,
                   cases[label],
                   cases,
+                  breakableLocations,
                   nextLabel,
                   false,
                   casesLabels, // need callback to know if jumped to default
@@ -198,12 +203,18 @@ export default {
                 line.cases.push(
                   t.switchCase(
                     null,
-                    build(nextLabel, cases[nextLabel], cases, isDefault.label),
+                    build(
+                      nextLabel,
+                      cases[nextLabel],
+                      cases,
+                      breakableLocations,
+                      isDefault.label,
+                    ),
                   ),
                 );
               }
+              breakableLocations[label] = line;
               body.push(line);
-              console.log(isDefault);
               isDefault.label &&
                 body.push(
                   t.returnStatement(
@@ -227,11 +238,13 @@ export default {
       label: number,
       lines: any[],
       cases: any[][],
+      breakableLocations: object, // { number: Node }
       breakOnLabel: number | null = null,
       isBreakable: boolean = false,
       casesLabels: number[] | null = null, // breaks on JUMP >= breakOnLabel && ignores
       isDefault = null,
     ): any[] {
+      // lines = [...lines];
       if (!lines || !Array.isArray(lines)) throw new Error('Invalid input');
       let body = [];
       while (lines.length) {
@@ -251,7 +264,6 @@ export default {
             );
           label++;
           if (casesLabels) {
-            console.log(label, breakOnLabel, isDefault);
             if (casesLabels?.includes(label)) {
               /*
               case 0:
@@ -267,7 +279,6 @@ export default {
               isDefault.label = isDefault.label
                 ? Math.max(label, isDefault.label)
                 : label;
-              console.log(label);
               body.push(t.breakStatement());
               continue;
             }
@@ -290,12 +301,22 @@ export default {
               );
             case 2: // RETURN
               // Let cleanup handle it
-              body.push(line);
+              body.push(t.cloneNode(line));
               // body.push(t.returnStatement(value)); // NOTE: no cloneNode
               break;
             case 3: // BREAK
               const nextLabel = value.value;
               const nextLines = cases[nextLabel];
+              console.log(
+                nextLabel,
+                breakOnLabel,
+                Object.fromEntries(
+                  Object.entries(breakableLocations).map((x) => [
+                    x[0],
+                    x[1].type,
+                  ]),
+                ),
+              );
               if (casesLabels && nextLabel >= breakOnLabel) {
                 if (nextLabel > breakOnLabel) {
                   isDefault.value = true;
@@ -321,6 +342,7 @@ export default {
                       nextLabel,
                       nextLines,
                       cases,
+                      breakableLocations,
                       breakOnLabel,
                       isBreakable,
                       casesLabels,
@@ -341,6 +363,7 @@ export default {
                   label + 1,
                   cases[label + 1],
                   cases,
+                  breakableLocations,
                   breakOnLabel,
                   isBreakable,
                   casesLabels,
@@ -362,6 +385,7 @@ export default {
                     label + 1,
                     cases[label + 1],
                     cases,
+                    breakableLocations,
                     breakOnLabel,
                     isBreakable,
                     casesLabels,
@@ -410,6 +434,7 @@ export default {
                   label,
                   inner,
                   cases,
+                  breakableLocations,
                   nextBreakOnLabel,
                   isBreakable,
                   casesLabels,
@@ -434,6 +459,7 @@ export default {
                   label,
                   lines,
                   cases,
+                  breakableLocations,
                   nextLabel,
                   isBreakable,
                   casesLabels,
@@ -448,6 +474,7 @@ export default {
                         handlerLabel,
                         cases[handlerLabel],
                         cases,
+                        breakableLocations,
                         nextLabel,
                         isBreakable,
                         casesLabels,
@@ -462,6 +489,7 @@ export default {
                       finalizerLabel,
                       cases[finalizerLabel],
                       cases,
+                      breakableLocations,
                       nextLabel,
                       isBreakable,
                       casesLabels,
@@ -473,10 +501,7 @@ export default {
           );
           label = nextLabel;
           lines = cases[nextLabel];
-        } /* else if (t.isStatement(line)) {
-            // find returns here
-            body.push(t.cloneNode(line));
-        }*/ else {
+        } else {
           body.push(t.cloneNode(line));
         }
       }
@@ -527,18 +552,25 @@ export default {
         WhileStatement(path) {
           const params = [null, null, null];
           const init = getPreviousPathSibling(path);
-          if (t.isExpressionStatement(init.node)) {
+          if (
+            t.isExpressionStatement(init.node) &&
+            !t.isCallExpression(init.node.expression)
+          ) {
             params[0] = init.node.expression;
             init.remove();
           }
           const block = path.node.body;
           const test = block.body[0];
           if (loopTestParam.match(test)) {
+            // make while loop if this matches
             params[1] = test.test.argument;
             block.body.splice(0, 1);
           }
           const update = block.body[block.body.length - 1];
-          if (t.isExpressionStatement(update)) {
+          if (
+            t.isExpressionStatement(update) &&
+            !t.isCallExpression(update.expression)
+          ) {
             params[2] = update.expression;
             block.body.splice(-1, 1);
           }
@@ -547,6 +579,7 @@ export default {
           }
         },
         ReturnStatement({ node }) {
+          // if (node.argument.elements[0].value != 2) throw 'ERROR';
           node.argument = node.argument.elements[1] || null;
         },
         SwitchStatement({ node: { cases } }) {
@@ -559,7 +592,7 @@ export default {
         },
       });
       yieldsPaths.forEach((yieldPath) =>
-        getNextPathSibling(yieldPath).traverse({
+        getNextPathSibling(yieldPath)?.traverse({
           CallExpression(sentPath) {
             if (!generatorSent.match(sentPath.node)) return;
             sentPath.replaceWith(t.cloneNode(yieldPath.node));
@@ -592,9 +625,13 @@ export default {
           func.generator = true;
 
           const cases = generatorCases.current!.map((c) => c.consequent);
-          resolveLoops(cases);
-          resolveSwitchs(cases);
-          path.replaceWithMultiple(build(0, cases[0], cases));
+          const breakableLocations = {};
+          resolveLoops(cases, breakableLocations);
+          // console.log(cases);
+          resolveSwitchs(cases, breakableLocations);
+          path.replaceWithMultiple(
+            build(0, cases[0], cases, breakableLocations),
+          );
           cleanup(path.parentPath);
           this.changes++;
         },

@@ -127,6 +127,61 @@ describe('TS', () => {
         yield 1;
       }
     `));
+  test('simple 4', () =>
+    expectJS(`
+      function test() {
+        return __generator(this, function (_a) {
+          switch (_a.label) {
+            case 0:
+              if (!a) {
+                return [3 /*break*/, 2];
+              }
+              return [4 /*yield*/, 1];
+            case 1:
+              _a.sent();
+              return [3 /*break*/, 8];
+            case 2:
+              if (!b) {
+                return [3 /*break*/, 4];
+              }
+              return [4 /*yield*/, 2];
+            case 3:
+              _a.sent();
+              return [3 /*break*/, 8];
+            case 4:
+              if (!c) {
+                return [3 /*break*/, 6];
+              }
+              return [4 /*yield*/, 3];
+            case 5:
+              _a.sent();
+              return [3 /*break*/, 8];
+            case 6:
+              if (!d) {
+                return [3 /*break*/, 8];
+              }
+              return [4 /*yield*/, 4];
+            case 7:
+              _a.sent();
+              _a.label = 8;
+            case 8:
+              return [2 /*return*/];
+          }
+        });
+      }
+    `).toMatchInlineSnapshot(`
+      function* test() {
+        if (a) {
+          yield 1;
+        } else if (b) {
+          yield 2;
+        } else if (c) {
+          yield 3;
+        } else if (d) {
+          yield 4;
+        }
+      }
+    `));
   test('for loop', () =>
     expectJS(`
       function test(i) {
@@ -312,134 +367,169 @@ describe('TS', () => {
       }
     `));
   test('labeled break', () =>
-    expectJS(`function test() {
-      var k, i, _a;
-      return __generator(this, function (_b) {
-        switch (_b.label) {
-          case 0:
-            return [4 /*yield*/, 0];
-          case 1:
-            _b.sent();
-            k = 0;
-            _b.label = 2;
-          case 2:
-            if (!(k < 10)) return [3 /*break*/, 27];
-            if (_) if (_) return [3 /*break*/, 27];
-            if (!_) return [3 /*break*/, 4];
-            return [4 /*yield*/, 1];
-          case 3:
-            _b.sent();
-            _b.label = 4;
-          case 4:
-            i = 0;
-            _b.label = 5;
-          case 5:
-            if (!(i < 100)) return [3 /*break*/, 22];
-            return [4 /*yield*/, 2];
-          case 6:
-            _b.sent();
-            _b.label = 7;
-          case 7:
-            if (!_) return [3 /*break*/, 19];
-            if (!_) return [3 /*break*/, 9];
-            return [4 /*yield*/, 3];
-          case 8:
-            _b.sent();
-            return [3 /*break*/, 17];
-          case 9:
-            if (!_) return [3 /*break*/, 17];
-            return [4 /*yield*/, 4];
-          case 10:
-            _b.sent();
-            _a = _;
-            switch (_a) {
-              case _:
-                return [3 /*break*/, 11];
-              case _:
-                return [3 /*break*/, 13];
-            }
-            return [3 /*break*/, 14];
-          case 11:
-            return [4 /*yield*/, 5];
-          case 12:
-            _b.sent();
-            return [3 /*break*/, 16];
-          case 13:
-            return [3 /*break*/, 27];
-          case 14:
-            return [4 /*yield*/, 6];
-          case 15:
-            _b.sent();
-            return [3 /*break*/, 19];
-          case 16:
-            return [3 /*break*/, 22];
-          case 17:
-            return [4 /*yield*/, 7];
-          case 18:
-            _b.sent();
-            return [3 /*break*/, 7];
-          case 19:
-            return [4 /*yield*/, 8];
-          case 20:
-            _b.sent();
-            if (_) return [3 /*break*/, 22];
-            _b.label = 21;
-          case 21:
-            i++;
-            return [3 /*break*/, 5];
-          case 22:
-            if (!_) return [3 /*break*/, 24];
-            return [4 /*yield*/, 9];
-          case 23:
-            _b.sent();
-            _b.label = 24;
-          case 24:
-            return [4 /*yield*/, 10];
-          case 25:
-            _b.sent();
-            _b.label = 26;
-          case 26:
-            k++;
-            return [3 /*break*/, 2];
-          case 27:
-            return [4 /*yield*/, 11];
-          case 28:
-            _b.sent();
-            return [2 /*return*/];
-        }
-      });
-    }
+    expectJS(`
+      function test() {
+        var k;
+        var i;
+        var _a;
+        return __generator(this, function (_b) {
+          switch (_b.label) {
+            case 0:
+              return [4 /*yield*/, 0];
+            case 1:
+              _b.sent();
+              k = 0;
+              _b.label = 2;
+            case 2:
+              if (!(k < 10)) {
+                return [3 /*break*/, 27];
+              }
+              if (a) {
+                if (b) {
+                  return [3 /*break*/, 27];
+                }
+              }
+              if (!c) {
+                return [3 /*break*/, 4];
+              }
+              return [4 /*yield*/, 1];
+            case 3:
+              _b.sent();
+              _b.label = 4;
+            case 4:
+              i = 0;
+              _b.label = 5;
+            case 5:
+              if (!(i < 100)) {
+                return [3 /*break*/, 22];
+              }
+              return [4 /*yield*/, 2];
+            case 6:
+              _b.sent();
+              _b.label = 7;
+            case 7:
+              if (!d) {
+                return [3 /*break*/, 19];
+              }
+              if (!e) {
+                return [3 /*break*/, 9];
+              }
+              return [4 /*yield*/, 3];
+            case 8:
+              _b.sent();
+              return [3 /*break*/, 17];
+            case 9:
+              if (!f) {
+                return [3 /*break*/, 17];
+              }
+              return [4 /*yield*/, 4];
+            case 10:
+              _b.sent();
+              _a = g;
+              switch (_a) {
+                case h:
+                  return [3 /*break*/, 11];
+                case j:
+                  return [3 /*break*/, 13];
+              }
+              return [3 /*break*/, 14];
+            case 11:
+              return [4 /*yield*/, 5];
+            case 12:
+              _b.sent();
+              return [3 /*break*/, 16];
+            case 13:
+              return [3 /*break*/, 27];
+            case 14:
+              return [4 /*yield*/, 6];
+            case 15:
+              _b.sent();
+              return [3 /*break*/, 19];
+            case 16:
+              return [3 /*break*/, 22];
+            case 17:
+              return [4 /*yield*/, 7];
+            case 18:
+              _b.sent();
+              return [3 /*break*/, 7];
+            case 19:
+              return [4 /*yield*/, 8];
+            case 20:
+              _b.sent();
+              if (l) {
+                return [3 /*break*/, 22];
+              }
+              _b.label = 21;
+            case 21:
+              i++;
+              return [3 /*break*/, 5];
+            case 22:
+              if (!m) {
+                return [3 /*break*/, 24];
+              }
+              return [4 /*yield*/, 9];
+            case 23:
+              _b.sent();
+              _b.label = 24;
+            case 24:
+              return [4 /*yield*/, 10];
+            case 25:
+              _b.sent();
+              _b.label = 26;
+            case 26:
+              k++;
+              return [3 /*break*/, 2];
+            case 27:
+              return [4 /*yield*/, 11];
+            case 28:
+              _b.sent();
+              return [2 /*return*/];
+          }
+        });
+      }
     `).toMatchInlineSnapshot(`
       function* test() {
         yield 0;
         label_a: for (let k = 0; k < 10; k++) {
-          if (_) if (_) break;
-          if (_) yield 1;
+          if (a) {
+            if (b) {
+              break;
+            }
+          }
+          if (c) {
+            yield 1;
+          }
           label_b: for (let i = 0; i < 100; i++) {
             yield 2;
-            label_c: while (_) {
-              if (_) {
+            label_c: while (d) {
+              if (e) {
                 yield 3;
-              } else if (_) {
-                yield 4;
-                switch (_) {
-                  case _:
-                    yield 5;
-                    break;
-                  case _:
-                    break label_a;
-                  default:
-                    yield 6;
-                    break label_c;
+              } else {
+                if (f) {
+                  yield 4;
+                  switch (g) {
+                    case h:
+                      yield 5;
+                      break;
+                    case j:
+                      break label_a;
+                    default:
+                      yield 6;
+                      break label_c;
+                  }
+                  break label_b;
                 }
-                break label_b;
               }
               yield 7;
             }
             yield 8;
-            if (_) break;
+            if (l) {
+              break;
+            }
           }
-          if (_) yield 9;
+          if (m) {
+            yield 9;
+          }
           yield 10;
         }
         yield 11;
