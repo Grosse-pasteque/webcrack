@@ -525,7 +525,7 @@ describe('TS', () => {
             yield 8;
             if (l) {
               break;
-            } 
+            }
           }
           if (m) {
             yield 9;
