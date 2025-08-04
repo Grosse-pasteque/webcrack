@@ -728,5 +728,107 @@ describe('TS', () => {
         yield "end";
       }
     `));
+  test('if', () =>
+    expectJS(`
+      function test() {
+        return __generator(this, function (_b) {
+          switch (_b.label) {
+            case 0:
+              if (!a) return [3 /*break*/, 2];
+              return [4 /*yield*/, 0];
+            case 1:
+              _b.sent();
+              _b.label = 2;
+            case 2: return [4 /*yield*/, 1];
+            case 3:
+              _b.sent();
+              return [2 /*return*/];
+          }
+        });
+      }
+    `).toMatchInlineSnapshot(`
+      function* test() {
+        if (a) yield 0;
+        yield 1;
+      }
+    `));
+  test('if else if else', () =>
+    expectJS(`
+      function test() {
+        return tslib_1.__generator(this, function (_a) {
+          switch (_a.label) {
+            case 0:
+              if (!a) return [3 /*break*/, 7];
+              if (!b) return [3 /*break*/, 2];
+              return [4 /*yield*/, 0];
+            case 1:
+              _a.sent();
+              return [3 /*break*/, 6];
+            case 2:
+              if (!c) return [3 /*break*/, 4];
+              return [4 /*yield*/, 1];
+            case 3:
+              _a.sent();
+              return [3 /*break*/, 6];
+            case 4:
+              return [4 /*yield*/, 2];
+            case 5:
+              _a.sent();
+              _a.label = 6;
+            case 6:
+              return [3 /*break*/, 11];
+            case 7:
+              if (!d) return [3 /*break*/, 9];
+              return [4 /*yield*/, 3];
+            case 8:
+              _a.sent();
+              return [3 /*break*/, 11];
+            case 9:
+              return [4 /*yield*/, 4];
+            case 10:
+              _a.sent();
+              _a.label = 11;
+            case 11:
+              return [4 /*yield*/, 5];
+            case 12:
+              _a.sent();
+              if (!e) return [3 /*break*/, 14];
+              return [4 /*yield*/, 6];
+            case 13:
+              _a.sent();
+              return [3 /*break*/, 16];
+            case 14:
+              return [4 /*yield*/, 7];
+            case 15:
+              _a.sent();
+              _a.label = 16;
+            case 16:
+              return [2 /*return*/];
+          }
+        });
+      }
+    `).toMatchInlineSnapshot(`
+      function* test() {
+        if (a) {
+          if (b) {
+            yield 0;
+          } else if (!c) {
+            yield 1;
+          } else {
+            yield 2;
+          }
+        } else if (d) {
+          yield 3;
+        } else {
+          yield 4;
+        }
+        yield 5;
+        if (e) {
+          yield 6;
+        } else {
+          yield 7;
+        }
+      }
+    `));
 });
 // describe('Babel', () => { /* None for now ... */ });
