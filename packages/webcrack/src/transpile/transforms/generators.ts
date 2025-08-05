@@ -96,7 +96,7 @@ type Edge = {
 function remove(array: any[], elem: any) {
   const i = array.indexOf(elem);
   if (i === -1) return false;
-  array.splice(i, 1)[0].block.remove();
+  array.splice(i, 1); // [0].block.remove();
   return true;
 }
 
@@ -162,6 +162,11 @@ class Context {
             // NOTE: not sure if it's possible to have more than 1 yield per block?
             if (this.yieldPath)
               throw new Error('Generator: impossible multiple yields');
+            if (
+              path.key != this.block.node.consequent.length - 1 ||
+              path.parentPath != this.block
+            )
+              throw new Error('Generator: invalid generator location');
             this.yieldPath = path;
             this.yieldReplacement = t.expressionStatement(
               t.yieldExpression(
@@ -196,7 +201,7 @@ class Context {
    */
   simplifyOutputs(index: number) {
     if (!this.yieldPath) return;
-    const [{ block, children }] = this.graph.splice(index + 1, 1);
+    const [{ label, block, children }] = this.graph.splice(index + 1, 1);
     /* NOTE: assumption
     if (parents.length)
       throw new Error('Yield block has parents');
@@ -211,13 +216,16 @@ class Context {
       },
     });
     // Merge Contexts
-    this.yieldPath.replaceWithMultiple(block.node.consequent);
+    const body = this.block.node.consequent;
+    body.pop();
+    body.push(...block.node.consequent);
+    // this.yieldPath.replaceWithMultiple(block.node.consequent);
     // path.container.splice(path.key, 1, ...block.node.consequent);
     for (const edge of children) {
       edge.from = this.label;
       this.children.push(edge);
     }
-    block.remove();
+    // block.remove();
   }
   static resolves: Function[] = [
     // NOTE: mb they need to run like this: for (const resolve of resolves) for (const context of graph) resolve(context)
@@ -238,9 +246,19 @@ class Context {
       ];
       return true;
     },
+    function SWITCH(index: number, context: Context) {
+      /*
+      case <label>:
+        switch (...) {
+          case ...: <BREAK>
+          ...
+        }
+      */
+      return false;
+    },
     function IF(index: number, context: Context) {
-      return;
-      // FIXME: Freak IF == IFELSE its just that the break location is like idk how to say but shifted ig
+      // return false;
+      if (context.children.length < 2) return false;
       /*
       case <label>:
         ...
@@ -248,7 +266,6 @@ class Context {
         ...
         <BREAK>
       */
-      if (context.children.length < 2) return false;
       // IF -> childs match -> [..., { label: X, isDirect: false }, { label: X, isDirect: true }];
       const next = context.children.pop(),
         branch = context.children.pop(); // NOTE: could destruct next and assume isDirect to be true
@@ -257,15 +274,14 @@ class Context {
         next.label != branch.label ||
         !t.isIfStatement(ifParent) ||
         !t.isUnaryExpression(ifParent.test, { operator: '!' }) ||
-        !next.isDirect
+        !next.isDirect ||
+        branch.isDirect // not mandatory
       ) {
         context.children.push(branch, next);
         return false;
       }
-      console.log('IF', index, context.graph);
-      const { block, children } = context.graph.find(
-        (c) => c.label == next.label,
-      ); // NOTE: actually this should be the direct next Context aka graph[i + 1]
+      console.log('IF', context.label);
+      const { block, children } = context.graph.find((c) => c.label == next.to); // NOTE: actually this should be the direct next Context aka graph[i + 1]
       /* NOTE: assumption
       if (!nextContext)
         throw new Error('Invalid Generator: missing next context');
@@ -276,13 +292,15 @@ class Context {
         body.splice(key + 1, body.length - key - 2),
       );
       ifParent.test = ifParent.test.argument;
-      next.path.replaceWithMultiple(block.node.consequent);
+      body.pop(); // next.path.remove();
+      body.push(...block.node.consequent); // next.path.replaceWithMultiple(block.node.consequent);
+      // FIXME: still fked up ... idk how to fix
       // merge
       context.children.push(...children);
       // NOTE: context is annoying... all that just to remove the next Context...
       let i = 0;
       for (const c of context.graph) {
-        if (c.label == next.label) {
+        if (c.label == next.to) {
           context.graph.splice(i, 1);
           return true;
         }
@@ -290,9 +308,10 @@ class Context {
       }
     },
     function IFELSE(index: number, context: Context) {
-      const graph = context.graph;
       if (index < 2 || context.parents.length < 2) return false;
 
+      console.log('IFELSE', context.label);
+      const graph = context.graph;
       let lastLabel = null;
       let current: t.Statement | null = null;
       while (context.parents.length) {
@@ -308,7 +327,7 @@ class Context {
           const { node: ifParent } = edgeBranch.path.parentPath.parentPath;
           if (
             edgeNext.to == context.label &&
-            (edgeBranch.to == lastLabel || !lastLabel) &&
+            edgeBranch.to == lastLabel &&
             t.isIfStatement(ifParent) &&
             t.isUnaryExpression(ifParent.test, { operator: '!' }) &&
             edgeNext.isDirect
@@ -354,36 +373,7 @@ class Context {
         <BREAK>
       */
     } else if (t.isSwitchCase(path.parent)) {
-      /*
-      case <label>:
-        switch (...) {
-          case ...: <BREAK>
-          ...
-        }
-      */
     } else if (t.isIfStatement(path.parent)) {
-      if (t.isSwitchCase(path.parentPath.parent)) {
-        /*
-        case <label>:
-          if (...) <BREAK>
-        */
-      } else {
-        /*
-        case <label>:
-          if (...) ... if (...) <BREAK>
-        */
-        /* NOTE: <BREAK> must be `break <label?>`
-        
-        This is a bit tricky to explain but basically nested `ifStatement` can only contain <RETURN>
-          normally unless we are inside a loop then it can contain a <BREAK>
-          but then it must be a `break <label?>`.
-        If it was a <BREAK> to some other code,
-          the nested `ifStatement` would have gotten flattened.
-        Hence we can replace it by a `breakStatement(label?)`
-          optionally labeled if the <BREAK> location isn't the direct Loop/Switch parent.
-        */
-        path.replaceWith(t.breakStatement(/* FIXME: labeled breaks */));
-      }
     } else {
       throw new Error(`Invalid parent for BREAK ${this.label} -> ${label}`);
     }
@@ -432,19 +422,26 @@ export default {
 
           for (const context of graph) context.setIncomingEdges();
 
-          let i = 0;
-          while (true) {
-            // NOTE: this is kind of a mess
-            const context = graph[i];
-            if (context) {
-              for (const resolve of Context.resolves)
-                if (resolve(i, context)) break;
-            } else break;
-            i = graph.indexOf(context) + 1;
+          // let i: number;
+          // for (const resolve of Context.resolves) {
+          //   i = 0;
+          //   for (const context of graph) if (resolve(i, context)) break;
+          // }
+
+          for (const resolve of Context.resolves) {
+            let i = 0;
+            while (true) {
+              // NOTE: this is kind of a mess
+              const context = graph[i];
+              if (!context) break;
+              let changed = resolve(i, context);
+              i = graph.indexOf(context);
+              if (!changed) i++;
+            }
           }
 
-          // path.replaceWithMultiple(graph[0].block.node.consequent);
-          console.log(graph);
+          path.replaceWithMultiple(graph[0].block.node.consequent);
+          // console.log(JSON.stringify(graph[0]));
           this.changes++;
         },
       },
