@@ -80,15 +80,65 @@ const loopTestParam = m.ifStatement(
   m.unaryExpression('!', m.anything()),
   m.blockStatement([m.breakStatement()]),
 );
+const generatorYieldMode = m.capture();
+const generatorYieldValue = m.capture();
+const generatorYield = m.returnStatement(
+  m.arrayExpression([
+    m.numericLiteral(generatorYieldMode),
+    generatorYieldValue,
+  ]),
+);
+const generatorReturnMode = m.capture();
+const generatorReturnValue = m.capture();
+const generatorReturn = m.returnStatement(
+  m.arrayExpression([
+    m.numericLiteral(generatorReturnMode),
+    generatorReturnValue,
+  ]),
+);
+const generatorBreakTo = m.capture();
+const generatorBreakTest = m.capture();
+const generatorBreak = m.returnStatement(
+  m.arrayExpression([m.numericLiteral(3), m.numericLiteral(generatorBreakTo)]),
+);
+const generatorIfBreak = m.ifStatement(
+  m.unaryExpression('!', generatorBreakTest),
+  m.blockStatement([generatorBreak]),
+  null,
+);
 
-type Next = NodePath<t.ReturnStatement | t.ExpressionStatement>;
+function replace(node, matcher, replacer, once = false, ignore = () => false) {
+  let replaced = 0;
+
+  function visit(n) {
+    if (ignore(n) || (once && replaced)) return n;
+    if (matcher(n)) {
+      replaced++;
+      return replacer(n);
+    }
+    for (const key in n) {
+      const child = n[key];
+      if (Array.isArray(child)) {
+        n[key] = child.map((c) => (t.isNode(c) ? visit(c) : c));
+      } else if (t.isNode(child)) {
+        n[key] = visit(child);
+      }
+    }
+    return n;
+  }
+  visit(node); // NOTE: won't work if node is directly the node that needs to be replaced.
+  return replaced;
+}
+
 type Edge = {
   /** Origin state machine label number */
   from: number;
   /** Target state machine label number */
   to: number;
   /** AST path containing the transition */
-  path: Next;
+  node: t.Node;
+  /** Position of the node inside it's body */
+  location: number;
   /** True if transition is directly in case block, false if nested */
   isDirect: boolean;
 };
@@ -96,7 +146,8 @@ type Edge = {
 function remove(array: any[], elem: any) {
   const i = array.indexOf(elem);
   if (i === -1) return false;
-  array.splice(i, 1); // [0].block.remove();
+  // array.splice(i, 1); // [0].block.remove();
+  delete array[i];
   return true;
 }
 
@@ -107,146 +158,122 @@ function remove(array: any[], elem: any) {
  */
 class Context {
   label: number;
-  block: NodePath<t.SwitchCase>;
+  body: t.Statement[];
   graph: Context[];
   children: Edge[] = [];
   parents: Edge[] = [];
-  yieldPath: Next | null = null;
-  yieldReplacement: t.ExpressionStatement | null = null;
-  type: string = 'Normal';
-  parameters: { [key: string]: any } = {};
 
   constructor(block: NodePath<t.SwitchCase>, graph: Context[]) {
     this.label = block.node.test.value; // NOTE: assumption
-    this.block = block;
+    this.body = block.node.consequent.map((n) => t.cloneNode(n));
     this.graph = graph;
   }
-  setOutgoingEdges() {
-    this.block.traverse({
-      'Function|ExpressionStatement|Expression': (
-        inner: NodePath<t.Function | t.ExpressionStatement | t.Expression>,
-      ) => inner.skip(),
-      ReturnStatement: (path: Next) => {
-        const isDirect = path.parent === this.block.node;
-        const [{ value: mode }, value = null] = path.node.argument.elements; // NOTE: assumption
-        switch (mode) {
-          case 0:
-          case 1: // SENT
-          case 6: // NORMAL
-          case 7: // ENDFINALLY
-            throw new Error(
-              "Generator modes: 0, 1, 6, 7 aren't yet supported...",
-            );
-          case 2: // RETURN
-            // NOTE: directly simplified
-            path.node.argument = value; // NOTE: no clone, path.replaceWith
-            break;
-          case 3: // BREAK
-            this.children.push({
-              from: this.label,
-              to: value.value,
-              path,
-              isDirect,
-            });
-            break;
-          case 4: // YIELD
-          case 5: // YIELD*
-            /* NOTE: assumption
-            if (
-              mode == 4 ||
-              t.isCallExpression(value) &&
-              value.arguments.length == 1 &&
-              isValuesHelper(value.callee)
-            )
-            */
-            // NOTE: not sure if it's possible to have more than 1 yield per block?
-            if (this.yieldPath)
-              throw new Error('Generator: impossible multiple yields');
-            if (
-              path.key != this.block.node.consequent.length - 1 ||
-              path.parentPath != this.block
-            )
-              throw new Error('Generator: invalid generator location');
-            this.yieldPath = path;
-            this.yieldReplacement = t.expressionStatement(
-              t.yieldExpression(
-                mode == 4 ? value : value.arguments[0],
-                mode == 5,
-              ),
-            );
-            break;
-        }
-      },
-    });
-    for (const statement of this.block.get('consequent')) {
-      // NOTE: could additionally check for "Generator.trys.push([...])"
-      if (generatorJump.match(statement.node))
-        // BREAK (more like a continue/jump but it's whatever)
+  /**
+   * Merges yields and their context
+   * Sets children
+   */
+  simplify() {
+    /* FIXME: Can't really traverse anymore but it's not so bad, the cases we can't handle are:
+    - loop breaks:      if (...) ... if (...) BREAK|CONTINUE
+    - returns:          ... RETURN
+
+    but they can be handled with a cleanup function (which also takes loops/switches locations)
+    */
+    let next = this.label + 1;
+    const newBody = [];
+    let location = 0;
+    while (true) {
+      const node = this.body.shift();
+      if (!node) {
+        this.body = newBody;
+        break;
+      }
+      let isDirect = true;
+      if (
+        generatorBreak.match(node) ||
+        ((isDirect = false), generatorIfBreak.match(node))
+      ) {
+        // BREAK
         this.children.push({
           from: this.label,
-          to: generatorJumpNext.current,
-          path: statement,
-          isDirect: true,
+          to: generatorBreakTo.current,
+          node,
+          location, // NOTE: does this gets affected when we modify the body, it shouldn't tho
+          isDirect,
         });
+        location = newBody.push(node);
+      } else if (!this.body.length) {
+        if (generatorJump.match(node)) {
+          // BREAK
+          if (generatorJumpNext.current != next)
+            throw new Error('Generator: impossible JUMP');
+          this.children.push({
+            from: this.label,
+            to: generatorJumpNext.current,
+            node,
+            location: -1,
+            isDirect: true,
+          });
+          location = newBody.push(node);
+        } else if (
+          // YIELD
+          generatorYield.match(node) &&
+          (generatorYieldMode.current == 4 || generatorYieldMode.current == 5)
+        ) {
+          /* FIXME: 
+            Actually I think we can instant merge now
+              which raises a problem actually,
+              since we can't traverse,
+              we can't find the `.send()` inside the next sibling expression statement
+              which means we can't accuratly replace it.
+            Maybe attach the replacement as metadata to the expression and replace it on cleanup?
+            Yeh but what's the point since it's not a path ? Why not just push a yieldExpression
+              then locate every yieldExpression inside the cleanup and replace?
+            So let's implement our custom replace traverse.
+          */
+          const { body } = this.graph[next];
+          delete this.graph[next++];
+          const firstStatement = body.shift();
+          const replacement = t.yieldExpression(
+            generatorYieldMode.current == 4
+              ? generatorYieldValue.current
+              : generatorYieldValue.current.arguments[0],
+            generatorYieldMode.current == 5,
+          );
+          if (
+            !replace(
+              firstStatement,
+              (n) => generatorSent.match(n),
+              () => replacement,
+              true,
+              (n) => t.isFunction(n),
+              // (n) => t.isDeclaration(n) || t.isExpressionStatement(n),
+            )
+          )
+            throw new Error('Generator: YIELD not found');
+          location = newBody.push(firstStatement);
+          this.body.push(...body);
+          // } else if (generatorReturn.match(node)) {
+          //  throw new Error("Generator modes: 0, 1 (SENT), 6 (NORMAL), 7 (ENDFINALLY) aren't yet supported...");
+          continue;
+        } else {
+          // TODO: replace returns?
+          location = newBody.push(node);
+          // throw new Error('Generator: unknown last statement');
+        }
+        this.body = newBody;
+        break;
+      }
     }
   }
-  setIncomingEdges() {
-    for (const edge of this.children)
-      this.graph.find((c) => c.label == edge.to).parents.push(edge);
-  }
-  /**
-   * Processes and flattens yield statements in the current context.
-   * Merges the following block's statements into the current block
-   * and updates control flow accordingly.
-   */
-  simplifyOutputs(index: number) {
-    if (!this.yieldPath) return;
-    const [{ label, block, children }] = this.graph.splice(index + 1, 1);
-    /* NOTE: assumption
-    if (parents.length)
-      throw new Error('Yield block has parents');
-    */
-    block.traverse({
-      // NOTE: This can be optimized
-      // NOTE: assuming block isn't empty
-      CallExpression: (sentPath: NodePath<t.CallExpression>) => {
-        if (!generatorSent.match(sentPath.node)) return;
-        sentPath.replaceWith(this.yieldReplacement);
-        sentPath.stop();
-      },
-    });
-    // Merge Contexts
-    const body = this.block.node.consequent;
-    body.pop();
-    body.push(...block.node.consequent);
-    // this.yieldPath.replaceWithMultiple(block.node.consequent);
-    // path.container.splice(path.key, 1, ...block.node.consequent);
-    for (const edge of children) {
-      edge.from = this.label;
-      this.children.push(edge);
+  setParents() {
+    for (const edge of this.children) {
+      this.graph.find((c) => c?.label == edge.to).parents.push(edge);
     }
-    // block.remove();
   }
   static resolves: Function[] = [
-    // NOTE: mb they need to run like this: for (const resolve of resolves) for (const context of graph) resolve(context)
-    function LOOP(index: number, context: Context) {
-      return false;
-      /*
-      case <label>:
-        ...
-      */
-      // NOTE: could directly loop for the loop update (since it must have 1 child leading to the loop test) but it's probably inconsistent
-      const foundLoop = context.parents.find(
-        (parent) => parent.label > context.label,
-      );
-      if (!foundLoop) return false;
-      const body = context.block.node.consequent;
-      context.block.node.consequent = [
-        t.whileStatement(t.booleanLiteral(true), t.blockStatement(body)),
-      ];
-      return true;
-    },
-    function SWITCH(index: number, context: Context) {
+    // NOTE: mb they need to run like this: for (const resolve of resolves) for (const context of graph) if (context) resolve(context)
+    function SWITCH(context: Context) {
       /*
       case <label>:
         switch (...) {
@@ -256,7 +283,7 @@ class Context {
       */
       return false;
     },
-    function IF(index: number, context: Context) {
+    function IF(context: Context) {
       // return false;
       if (context.children.length < 2) return false;
       /*
@@ -269,76 +296,65 @@ class Context {
       // IF -> childs match -> [..., { label: X, isDirect: false }, { label: X, isDirect: true }];
       const next = context.children.pop(),
         branch = context.children.pop(); // NOTE: could destruct next and assume isDirect to be true
-      const { node: ifParent, key } = branch.path.parentPath.parentPath;
-      if (
-        next.label != branch.label ||
-        !t.isIfStatement(ifParent) ||
-        !t.isUnaryExpression(ifParent.test, { operator: '!' }) ||
-        !next.isDirect ||
-        branch.isDirect // not mandatory
-      ) {
+      if (next.to != branch.to || !next.isDirect || branch.isDirect || context.graph.find(c => c?.label == branch.to)?.parents?.length != 2) {
         context.children.push(branch, next);
         return false;
       }
       console.log('IF', context.label);
-      const { block, children } = context.graph.find((c) => c.label == next.to); // NOTE: actually this should be the direct next Context aka graph[i + 1]
+      const { body, children } = context.graph.find((c) => c?.label == next.to);
       /* NOTE: assumption
       if (!nextContext)
         throw new Error('Invalid Generator: missing next context');
       */
       // reverse
-      const body = context.block.node.consequent;
-      ifParent.consequent = t.blockStatement(
-        body.splice(key + 1, body.length - key - 2),
-      );
-      ifParent.test = ifParent.test.argument;
-      body.pop(); // next.path.remove();
-      body.push(...block.node.consequent); // next.path.replaceWithMultiple(block.node.consequent);
-      // FIXME: still fked up ... idk how to fix
+      context.body.pop(); // next.path.remove();
+      const key = context.body.indexOf(branch.node);
+      branch.node.consequent.body = context.body.splice(key + 1);
+      branch.node.test = branch.node.test.argument;
       // merge
+      context.body.push(...body); // next.path.replaceWithMultiple(block.node.consequent);
       context.children.push(...children);
       // NOTE: context is annoying... all that just to remove the next Context...
       let i = 0;
       for (const c of context.graph) {
-        if (c.label == next.to) {
-          context.graph.splice(i, 1);
+        if (c?.label == next.to) {
+          delete context.graph[i];
           return true;
         }
         i++;
       }
     },
-    function IFELSE(index: number, context: Context) {
-      if (index < 2 || context.parents.length < 2) return false;
+    function IFELSE(context: Context) {
+      if (context.parents.length < 2) return false;
 
       console.log('IFELSE', context.label);
       const graph = context.graph;
-      let lastLabel = null;
+      let lastLabel = context.label;
       let current: t.Statement | null = null;
       while (context.parents.length) {
-        const edge = context.parents.pop();
+        const edge = context.parents.pop(); // FIXME: removing edges is not bidirectional (parents/children)
 
         // NOTE: this should be the previous Context aka graph[i - 1]
-        let parentIndex = 0;
-        const parent = graph.find((c) => c.label == edge.from);
+        const parent = graph.find((c) => c?.label == edge.from);
 
-        if (current) {
-          const edgeNext = parent.children.pop(),
-            edgeBranch = parent.children.pop();
-          const { node: ifParent } = edgeBranch.path.parentPath.parentPath;
+        if (current || parent.children.length == 2) {
+          const next = parent.children.pop(),
+            branch = parent.children.pop();
           if (
-            edgeNext.to == context.label &&
-            edgeBranch.to == lastLabel &&
-            t.isIfStatement(ifParent) &&
-            t.isUnaryExpression(ifParent.test, { operator: '!' }) &&
-            edgeNext.isDirect
+            next.to == context.label &&
+            branch.to == lastLabel &&
+            !branch.isDirect &&
+            next.isDirect
           ) {
             lastLabel = parent.label;
-            const body = parent.block.node.consequent;
-            body.pop();
-            const key = body.indexOf(ifParent);
-            ifParent.consequent = t.blockStatement(body.splice(key + 1));
-            ifParent.test = ifParent.test.argument;
-            ifParent.alternate = current;
+            parent.body.pop();
+            const key = parent.body.indexOf(branch.node);
+            branch.node.consequent.body = parent.body.splice(key + 1);
+            branch.node.test = branch.node.test.argument;
+            if (current)
+              branch.node.alternate = current;
+            else if (context.parents.pop().from != edge.from) // Fixes case where not ELSE
+              throw new Error('Generator: impossible IFELSE structure');
             if (!parent.parents.length) {
               // this shit isn't updated in the current traversal so not consistent
               // merge current and context
@@ -346,23 +362,47 @@ class Context {
                 edge.from = parent.label;
                 parent.children.push(edge);
               }
-              console.log(context);
-              body.push(...context.block.node.consequent);
+              parent.body.push(...context.body);
               remove(graph, context);
               return true;
             }
-            current = ifParent;
+            current = branch.node;
           } else {
             // idk
           }
         } else {
           lastLabel = parent.label;
-          const body = parent.block.node.consequent;
-          body.pop();
-          current = t.blockStatement(body);
+          parent.body.pop();
+          current = t.blockStatement(parent.body);
         }
         remove(graph, parent);
       }
+    },
+    function LOOP(context: Context) {
+      /* FIXME: Need to run LOOP after everything not to mess up bodies.
+                But then IF are ran first and they completly mess up control flow.
+                So either:
+                + a parent ref attr to edges and make edges synced with each others
+                + something like a PRELOOP resolver that finds loops and replaces break/continue
+                + run LOOP resolver first and implement the WhileStatement after everything throught a callback
+      /*
+      case <label>:
+        ...
+      */
+      // NOTE: could directly loop for the loop update (since it must have 1 child leading to the loop test) but it's probably inconsistent
+      const loopEdge = context.parents.find(
+        e => e.from > context.label,
+      );
+      if (!loopEdge) return false;
+      console.log('LOOP');
+      const loop = context.graph.find(c => c?.label == loopEdge.from);
+      context.body = [
+        t.whileStatement(
+          t.booleanLiteral(true),
+          t.blockStatement(context.body),
+        ),
+      ];
+      return true;
     },
   ];
   tryToResolve(index: number) {
@@ -406,21 +446,11 @@ export default {
           const blocks = path.get('argument.arguments.1.body.body.0.cases');
           const graph: Context[] = [];
           for (const block of blocks) graph.push(new Context(block, graph));
-          for (const context of graph) context.setOutgoingEdges();
-
-          /* Reverse loop prevents errors like these from happening:
-
-          case 0:                             case 0:
-            return [4, 5];                      yield 5;
-          case 1:                ----->         return [4, 6];
-            _a.sent();                        case 1:
-            return [4, 6];                      yield 5;
-                                                yield 6;
-          */
-          for (let i = graph.length - 1; i >= 0; i--)
-            graph[i].simplifyOutputs(i);
-
-          for (const context of graph) context.setIncomingEdges();
+          console.log(graph);
+          for (const context of graph) context?.simplify();
+          for (const context of graph) context?.setParents();
+          for (const resolve of Context.resolves)
+            for (const context of graph) if (context) resolve(context);
 
           // let i: number;
           // for (const resolve of Context.resolves) {
@@ -428,19 +458,20 @@ export default {
           //   for (const context of graph) if (resolve(i, context)) break;
           // }
 
-          for (const resolve of Context.resolves) {
-            let i = 0;
-            while (true) {
-              // NOTE: this is kind of a mess
-              const context = graph[i];
-              if (!context) break;
-              let changed = resolve(i, context);
-              i = graph.indexOf(context);
-              if (!changed) i++;
-            }
-          }
+          // for (const resolve of Context.resolves) {
+          //   let i = 0;
+          //   while (true) {
+          //     // NOTE: this is kind of a mess
+          //     const context = graph[i];
+          //     if (!context) break;
+          //     let changed = resolve(i, context);
+          //     i = graph.indexOf(context);
+          //     if (!changed) i++;
+          //   }
+          // }
 
-          path.replaceWithMultiple(graph[0].block.node.consequent);
+          path.replaceWithMultiple(graph[0].body);
+          console.log(graph);
           // console.log(JSON.stringify(graph[0]));
           this.changes++;
         },
