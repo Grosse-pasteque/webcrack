@@ -274,6 +274,7 @@ class Context {
   static resolves: Function[] = [
     // NOTE: mb they need to run like this: for (const resolve of resolves) for (const context of graph) if (context) resolve(context)
     function SWITCH(context: Context) {
+      if (context.children.length < 2) return false;
       /*
       case <label>:
         switch (...) {
@@ -284,7 +285,6 @@ class Context {
       return false;
     },
     function IF(context: Context) {
-      // return false;
       if (context.children.length < 2) return false;
       /*
       case <label>:
@@ -378,6 +378,71 @@ class Context {
         remove(graph, parent);
       }
     },
+    function TRY(context: Context) {
+      const first = context.body.shift();
+      if (!generatorTry.match(first)) {
+        context.body.unshift(first);
+        return false;
+      }
+      const [blockLabel, handlerLabel, finalizerLabel, nextLabel] =
+        generatorTryJump.current.elements.map((n) => n?.value);
+      if (blockLabel !== label)
+        throw new Error(
+          `Invalid TRY blockLabel: ${blockLabel} !== ${label}`,
+        );
+      if (!handlerLabel && !finalizerLabel)
+        throw new Error('Invalid TRY: missing handler or finalizer');
+      body.push(
+        t.tryStatement(
+          t.blockStatement(
+            build(
+              label,
+              lines,
+              blocks,
+              breakableLocations,
+              nextLabel,
+              isBreakable,
+              casesLabels,
+              isDefault,
+            ),
+          ),
+          handlerLabel
+            ? t.catchClause(
+                null,
+                t.blockStatement(
+                  build(
+                    handlerLabel,
+                    blocks[handlerLabel],
+                    blocks,
+                    breakableLocations,
+                    nextLabel,
+                    isBreakable,
+                    casesLabels,
+                    isDefault,
+                  ),
+                ),
+              )
+            : null,
+          finalizerLabel
+            ? t.blockStatement(
+                build(
+                  finalizerLabel,
+                  blocks[finalizerLabel],
+                  blocks,
+                  breakableLocations,
+                  nextLabel,
+                  isBreakable,
+                  casesLabels,
+                  isDefault,
+                ),
+              )
+            : null,
+        ),
+      );
+      label = nextLabel;
+      lines = blocks[nextLabel];
+      return true;
+    },
     function LOOP(context: Context) {
       /* FIXME: Need to run LOOP after everything not to mess up bodies.
                 But then IF are ran first and they completly mess up control flow.
@@ -385,6 +450,10 @@ class Context {
                 + a parent ref attr to edges and make edges synced with each others
                 + something like a PRELOOP resolver that finds loops and replaces break/continue
                 + run LOOP resolver first and implement the WhileStatement after everything throught a callback
+                + I think a cleaner way would be something like DETECTLOOP first then last LOOP
+          NOTE: I think it raises another issue tho,
+                now it would be better to run IF IFELSE as phases like now and LOOP, SWITCH, TRY
+                but like for (const context of graph) for (const resolve of [LOOP, SWITCH, TRY]) resolve(context);
       /*
       case <label>:
         ...
@@ -447,6 +516,7 @@ export default {
           const graph: Context[] = [];
           for (const block of blocks) graph.push(new Context(block, graph));
           console.log(graph);
+          // NOTE: when only 1 Context left -> done
           for (const context of graph) context?.simplify();
           for (const context of graph) context?.setParents();
           for (const resolve of Context.resolves)
