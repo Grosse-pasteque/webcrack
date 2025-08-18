@@ -28,7 +28,7 @@ describe('TS', () => {
       function* test(i) {
         yield i;
         if (i > 0) {
-          yield test(i - 1);
+          yield* test(i - 1);
         }
       }
     `));
