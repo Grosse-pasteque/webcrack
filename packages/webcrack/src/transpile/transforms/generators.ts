@@ -132,18 +132,17 @@ function replace(node, matcher, replacer, once = false, ignore = () => false) {
   return replaced;
 }
 
-type Edge = {
-  /** Origin state machine label number */
+class Edge {
   from: number;
-  /** Target state machine label number */
   to: number;
-  /** AST path containing the transition */
   node: t.Node;
-  /** Position of the node inside it's body */
   location: number;
-  /** True if transition is directly in case block, false if nested */
   isDirect: boolean;
-};
+
+  constructor(from: number, to: number, node: t.Node, location: number, isDirect: boolean) {
+
+  }
+}
 
 function remove(array: any[], elem: any) {
   const i = array.indexOf(elem);
@@ -164,6 +163,7 @@ class Context {
   graph: Context[];
   children: Edge[] = [];
   parents: Edge[] = [];
+  breaks: number[] = [];
 
   constructor(block: NodePath<t.SwitchCase>, graph: Context[]) {
     this.label = block.node.test.value; // NOTE: assumption
@@ -271,19 +271,7 @@ class Context {
       this.graph.find((c) => c?.label === edge.to).parents.push(edge);
     }
   }
-  static resolves: Function[] = [
-    // NOTE: mb they need to run like this: for (const resolve of resolves) for (const context of graph) if (context) resolve(context)
-    function SWITCH(context: Context) {
-      if (context.children.length < 2) return false;
-      /*
-      case <label>:
-      switch (...) {
-      case ...: <BREAK>
-      ...
-      }
-      */
-      return false;
-    },
+  static resolvePerContext: Function[] = [
     function IF(context: Context) {
       if (context.children.length < 2) return false;
       /*
@@ -323,6 +311,20 @@ class Context {
         }
         i++;
       }
+    },
+  ];
+  static contextPerResolve: Function[] = [
+    // NOTE: mb they need to run like this: for (const resolve of resolves) for (const context of graph) if (context) resolve(context)
+    function SWITCH(context: Context) {
+      if (context.children.length < 2) return false;
+      /*
+      case <label>:
+        switch (...) {
+          case ...: <BREAK>
+          ...
+        }
+      */
+      return false;
     },
     function IFELSE(context: Context) {
       if (context.parents.length < 2) return false;
@@ -512,6 +514,7 @@ export default {
 
           const blocks = path.get('argument.arguments.1.body.body.0.cases');
           const graph: Context[] = [];
+          // TODO: make things cleaner `class Graph { nodes: Node[] = []; addNode(node: Node); removeNode(node: Node); mergeNodes(...nodes: Nodes[]); };`
           for (const block of blocks) graph.push(new Context(block, graph));
           // NOTE: when only 1 Context left -> done
           for (const context of graph) context?.simplify();
@@ -525,9 +528,8 @@ export default {
             depth: null,
             colors: true
           }))
-          // for (const resolve of Context.resolves)
-          //     for (const context of graph)
-          //         if (context) resolve(context);
+          // for (const resolve of Context.resolvePerContext) for (const context of graph) if (context) resolve(context);
+          // for (const context of graph) for (const resolve of Context.contextPerResolve) if (context) resolve(context);
 
           // let i: number;
           // for (const resolve of Context.resolves) {
