@@ -2,6 +2,8 @@ import type { NodePath } from '@babel/traverse';
 import * as t from '@babel/types';
 import * as m from '@codemod/matchers';
 import { type Transform } from '../../ast-utils';
+import { inspect } from 'util';
+
 
 const generatorCases = m.capture();
 const generatorIdentifier = m.capture(); // NOTE: check if binding is tslib.__generator (but changes depending on ts version...)
@@ -103,7 +105,7 @@ const generatorBreak = m.returnStatement(
 );
 const generatorIfBreak = m.ifStatement(
   m.unaryExpression('!', generatorBreakTest),
-  m.blockStatement([generatorBreak]),
+  m.or(generatorBreak, m.blockStatement([generatorBreak])),
   null,
 );
 
@@ -202,10 +204,10 @@ class Context {
           isDirect,
         });
         location = newBody.push(node);
-      } else if (!this.body.length) {
+      } else if (this.body.length === 0) {
         if (generatorJump.match(node)) {
           // BREAK
-          if (generatorJumpNext.current != next)
+          if (generatorJumpNext.current != this.graph[next].label)
             throw new Error('Generator: impossible JUMP');
           this.children.push({
             from: this.label,
@@ -218,7 +220,7 @@ class Context {
         } else if (
           // YIELD
           generatorYield.match(node) &&
-          (generatorYieldMode.current == 4 || generatorYieldMode.current == 5)
+          (generatorYieldMode.current === 4 || generatorYieldMode.current === 5)
         ) {
           /* FIXME: 
             Actually I think we can instant merge now
@@ -232,13 +234,13 @@ class Context {
             So let's implement our custom replace traverse.
           */
           const { body } = this.graph[next];
-          delete this.graph[next++];
+          this.graph.splice(next, 1);
           const firstStatement = body.shift();
           const replacement = t.yieldExpression(
-            generatorYieldMode.current == 4
+            generatorYieldMode.current === 4
               ? generatorYieldValue.current
               : generatorYieldValue.current.arguments[0],
-            generatorYieldMode.current == 5,
+            generatorYieldMode.current === 5,
           );
           if (
             !replace(
@@ -255,20 +257,18 @@ class Context {
           this.body.push(...body);
           // } else if (generatorReturn.match(node)) {
           //  throw new Error("Generator modes: 0, 1 (SENT), 6 (NORMAL), 7 (ENDFINALLY) aren't yet supported...");
-          continue;
         } else {
           // TODO: replace returns?
           location = newBody.push(node);
           // throw new Error('Generator: unknown last statement');
         }
-        this.body = newBody;
-        break;
       }
     }
+    this.body = newBody;
   }
   setParents() {
     for (const edge of this.children) {
-      this.graph.find((c) => c?.label == edge.to).parents.push(edge);
+      this.graph.find((c) => c?.label === edge.to).parents.push(edge);
     }
   }
   static resolves: Function[] = [
@@ -277,10 +277,10 @@ class Context {
       if (context.children.length < 2) return false;
       /*
       case <label>:
-        switch (...) {
-          case ...: <BREAK>
-          ...
-        }
+      switch (...) {
+      case ...: <BREAK>
+      ...
+      }
       */
       return false;
     },
@@ -296,7 +296,7 @@ class Context {
       // IF -> childs match -> [..., { label: X, isDirect: false }, { label: X, isDirect: true }];
       const next = context.children.pop(),
         branch = context.children.pop(); // NOTE: could destruct next and assume isDirect to be true
-      if (next.to != branch.to || !next.isDirect || branch.isDirect || context.graph.find(c => c?.label == branch.to)?.parents?.length != 2) {
+      if (next.to !== branch.to || !next.isDirect || branch.isDirect || context.graph.find(c => c?.label === branch.to)?.parents?.length !== 2) {
         context.children.push(branch, next);
         return false;
       }
@@ -317,7 +317,7 @@ class Context {
       // NOTE: context is annoying... all that just to remove the next Context...
       let i = 0;
       for (const c of context.graph) {
-        if (c?.label == next.to) {
+        if (c?.label === next.to) {
           delete context.graph[i];
           return true;
         }
@@ -335,14 +335,14 @@ class Context {
         const edge = context.parents.pop(); // FIXME: removing edges is not bidirectional (parents/children)
 
         // NOTE: this should be the previous Context aka graph[i - 1]
-        const parent = graph.find((c) => c?.label == edge.from);
+        const parent = graph.find((c) => c?.label === edge.from);
 
-        if (current || parent.children.length == 2) {
+        if (current || parent.children.length === 2) {
           const next = parent.children.pop(),
             branch = parent.children.pop();
           if (
-            next.to == context.label &&
-            branch.to == lastLabel &&
+            next.to === context.label &&
+            branch.to === lastLabel &&
             !branch.isDirect &&
             next.isDirect
           ) {
@@ -385,7 +385,7 @@ class Context {
         return false;
       }
       const [blockLabel, handlerLabel, finalizerLabel, nextLabel] =
-        generatorTryJump.current.elements.map((n) => n?.value);
+      generatorTryJump.current.elements.map((n) => n?.value);
       if (blockLabel !== label)
         throw new Error(
           `Invalid TRY blockLabel: ${blockLabel} !== ${label}`,
@@ -464,7 +464,7 @@ class Context {
       );
       if (!loopEdge) return false;
       console.log('LOOP');
-      const loop = context.graph.find(c => c?.label == loopEdge.from);
+      const loop = context.graph.find(c => c?.label === loopEdge.from);
       context.body = [
         t.whileStatement(
           t.booleanLiteral(true),
@@ -481,9 +481,7 @@ class Context {
       case <label>:
         <BREAK>
       */
-    } else if (t.isSwitchCase(path.parent)) {
-    } else if (t.isIfStatement(path.parent)) {
-    } else {
+    } else if (t.isSwitchCase(path.parent)) {} else if (t.isIfStatement(path.parent)) {} else {
       throw new Error(`Invalid parent for BREAK ${this.label} -> ${label}`);
     }
   }
@@ -499,9 +497,9 @@ export default {
         exit(path) {
           if (
             !generator.match(path.node.argument) ||
-            !generatorCases.current!.every((c, value) =>
-              t.isNumericLiteral(c.test, { value }),
-            )
+            !generatorCases.current!.every((c, value) => t.isNumericLiteral(c.test, {
+              value
+            }))
           )
             return;
 
@@ -515,12 +513,21 @@ export default {
           const blocks = path.get('argument.arguments.1.body.body.0.cases');
           const graph: Context[] = [];
           for (const block of blocks) graph.push(new Context(block, graph));
-          console.log(graph);
           // NOTE: when only 1 Context left -> done
           for (const context of graph) context?.simplify();
           for (const context of graph) context?.setParents();
-          for (const resolve of Context.resolves)
-            for (const context of graph) if (context) resolve(context);
+          console.log(inspect(graph.map(v => ({
+            label: v.label,
+            body: v.body.map(c => c.type),
+            children: v.children.map(c => c.to),
+            parents: v.parents.map(c => c.from)
+          })), {
+            depth: null,
+            colors: true
+          }))
+          // for (const resolve of Context.resolves)
+          //     for (const context of graph)
+          //         if (context) resolve(context);
 
           // let i: number;
           // for (const resolve of Context.resolves) {
@@ -541,7 +548,6 @@ export default {
           // }
 
           path.replaceWithMultiple(graph[0].body);
-          console.log(graph);
           // console.log(JSON.stringify(graph[0]));
           this.changes++;
         },
